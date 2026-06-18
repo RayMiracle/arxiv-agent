@@ -6,8 +6,27 @@ An interactive CLI tool that uses Claude to help you explore academic papers fro
 
 - Search ArXiv for papers on any topic
 - Multi-turn conversation — ask follow-up questions about papers already found
-- Smart routing: automatically detects whether a new search is needed or the question is a follow-up
+- Smart routing: Claude itself decides whether a new search is needed or the question is a follow-up
+- Language selection at startup: **English** or **Czech (Čeština)**
+  - Czech mode instructs Claude to respond in Czech, keeping technical terms in English with Czech explanations in brackets
 - Powered by Claude (`claude-haiku-4-5-20251001`)
+
+## What You Can Search For
+
+ArXiv hosts over 2 million open-access academic papers across eight major fields:
+
+| Field | Example topics |
+|---|---|
+| **Computer Science** | AI, machine learning, NLP, cryptography, computer vision |
+| **Physics** | Astrophysics, quantum physics, nuclear physics, optics |
+| **Mathematics** | Algebra, geometry, number theory, statistics |
+| **Quantitative Biology** | Genomics, neuroscience, evolutionary biology |
+| **Statistics** | Machine learning, applied statistics, methodology |
+| **Electrical Engineering** | Signal processing, systems and control |
+| **Quantitative Finance** | Econometrics, financial risk, portfolio theory |
+| **Economics** | Microeconomics, macroeconomics, general economics |
+
+All papers on ArXiv are **open-access** — no subscription required.
 
 ## Architecture
 
@@ -51,6 +70,12 @@ python arxiv-agent.py
 ============================================================
   ArXiv Research Assistant (powered by Claude)
 ============================================================
+
+Select language / Vyberte jazyk:
+  1. English
+  2. Czech (Čeština)
+Your choice (1/2): 1
+
 Ask me to find or explain research papers.
 Type 'exit' or 'quit' to leave.
 
@@ -61,6 +86,8 @@ Type 'exit' or 'quit' to leave.
 > exit
 Goodbye!
 ```
+
+In Czech mode, accepted exit commands are: `exit`, `quit`, `konec`, `ukončit`.
 
 ### Commands
 

@@ -12,7 +12,6 @@ This separation means you can swap main() for a web UI later without
 touching the agent logic.
 """
 
-import os
 import arxiv
 import anthropic
 from dotenv import load_dotenv
@@ -68,19 +67,37 @@ def search_arxiv(query: str, max_results: int = 5) -> list[dict]:
 # 2. Core agent (no CLI logic lives here)
 # ---------------------------------------------------------------------------
 
-# System prompt that tells Claude how to behave
-_SYSTEM_PROMPT = """\
-You are a helpful research assistant that specialises in academic papers from ArXiv.
+def _build_system_prompt(language: str) -> str:
+    """
+    Build the system prompt for Claude based on the chosen language.
 
-When the user asks about a topic, you will be given relevant paper summaries as
-context.  Use those papers to give accurate, well-organised answers.
+    Parameters
+    ----------
+    language : 'en' for English, 'cs' for Czech
+    """
+    base = (
+        "You are a helpful research assistant that specialises in academic papers from ArXiv.\n\n"
+        "When the user asks about a topic, you will be given relevant paper summaries as "
+        "context. Use those papers to give accurate, well-organised answers.\n\n"
+        "Guidelines:\n"
+        "- Cite papers by title when you reference them.\n"
+        "- If the context does not contain enough information to answer, say so clearly.\n"
+        "- Keep explanations accessible — avoid unnecessary jargon.\n"
+        "- For follow-up questions, use the papers already in the conversation.\n"
+    )
 
-Guidelines:
-- Cite papers by title when you reference them.
-- If the context does not contain enough information to answer, say so clearly.
-- Keep explanations accessible — avoid unnecessary jargon.
-- For follow-up questions, use the papers already in the conversation.
-"""
+    if language == "cs":
+        # Czech-specific instructions appended to the shared base
+        base += (
+            "\nLanguage instructions:\n"
+            "- Always respond in Czech (česky).\n"
+            "- Use simple, clear Czech suitable for someone still learning the field.\n"
+            "- Keep technical terms in English but add a brief Czech explanation in "
+            "brackets immediately after, e.g. 'transformer (síť pro zpracování sekvencí)'.\n"
+            "- Paper titles and author names should be left in their original language."
+        )
+
+    return base
 
 
 class ResearchAgent:
@@ -98,9 +115,17 @@ class ResearchAgent:
         reply = agent.ask("Which of those papers is most beginner-friendly?")
     """
 
-    def __init__(self):
+    def __init__(self, language: str = "en"):
+        """
+        Parameters
+        ----------
+        language : 'en' for English (default), 'cs' for Czech
+        """
         # Anthropic client reads ANTHROPIC_API_KEY from the environment
         self._client = anthropic.Anthropic()
+
+        # Build the system prompt once based on the chosen language
+        self._system_prompt = _build_system_prompt(language)
 
         # Full conversation history: list of {"role": ..., "content": ...} dicts
         # This is passed to Claude on every request so it remembers context.
@@ -156,7 +181,7 @@ class ResearchAgent:
         response = self._client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1024,
-            system=_SYSTEM_PROMPT,
+            system=self._system_prompt,   # built from the chosen language
             messages=self.history,
         )
 
@@ -248,10 +273,34 @@ def main():
     print("=" * 60)
     print("  ArXiv Research Assistant (powered by Claude)")
     print("=" * 60)
-    print("Ask me to find or explain research papers.")
-    print("Type 'exit' or 'quit' to leave.\n")
 
-    agent = ResearchAgent()
+    # --- Language selection ---
+    print("\nSelect language / Vyberte jazyk:")
+    print("  1. English")
+    print("  2. Czech (Čeština)")
+
+    language = "en"  # default
+    while True:
+        lang_choice = input("Your choice (1/2): ").strip()
+        if lang_choice == "1":
+            language = "en"
+            break
+        elif lang_choice == "2":
+            language = "cs"
+            break
+        else:
+            print("Please enter 1 or 2.")
+
+    print()
+    if language == "cs":
+        print("Jazyk nastaven na češtinu.")
+        print("Zeptejte se mě na výzkumné články. Napište 'exit', 'quit', 'konec' nebo 'ukončit' pro ukončení.")
+    else:
+        print("Ask me to find or explain research papers.")
+        print("Type 'exit' or 'quit' to leave.")
+    print()
+
+    agent = ResearchAgent(language=language)
 
     while True:
         # Prompt the user for input
@@ -266,9 +315,12 @@ def main():
         if not user_input:
             continue
 
-        # Check for exit commands
-        if user_input.lower() in {"exit", "quit"}:
-            print("Goodbye!")
+        # Check for exit commands (English always accepted; Czech added when language is Czech)
+        exit_commands = {"exit", "quit"}
+        if language == "cs":
+            exit_commands |= {"konec", "ukončit"}
+        if user_input.lower() in exit_commands:
+            print("Goodbye!" if language == "en" else "Na shledanou!")
             break
 
         # Send the message to the agent and print the response
