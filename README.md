@@ -6,7 +6,11 @@ An interactive CLI tool that uses Claude to help you explore academic papers fro
 
 - Search ArXiv for papers on any topic
 - Multi-turn conversation — ask follow-up questions about papers already found
-- Smart routing: Claude itself decides whether a new search is needed or the question is a follow-up
+- Smart routing: Claude classifies every message as **SEARCH**, **FOLLOWUP**, or **UNCLEAR**
+  - `SEARCH` — fetches fresh ArXiv papers for a new topic
+  - `FOLLOWUP` — answers using papers already in the conversation
+  - `UNCLEAR` — skips the search and asks the user for clarification
+  - On the first message (no prior papers), only `SEARCH` or `UNCLEAR` are offered
 - Language selection at startup: **English** or **Czech (Čeština)**
   - Czech mode instructs Claude to respond in Czech, keeping technical terms in English with Czech explanations in brackets
 - Powered by Claude (`claude-haiku-4-5-20251001`)
@@ -96,11 +100,15 @@ In Czech mode, accepted exit commands are: `exit`, `quit`, `konec`, `ukončit`.
 | Any topic or question | Search ArXiv and answer |
 | Follow-up question | Answer using papers already in context |
 | `exit` / `quit` | Exit the program |
+| `konec` / `ukončit` (Czech mode) | Exit the program |
 | `Ctrl+C` / `Ctrl+D` | Exit gracefully |
 
 ## How It Works
 
-1. On the first message, the agent always searches ArXiv.
-2. For subsequent messages, a fast classifier call (`max_tokens=10`) asks Claude whether the message is a **new topic** (`SEARCH`) or a **follow-up** (`FOLLOWUP`).
-3. If a new search is needed, the top 5 most relevant papers are fetched and prepended to the user message as context.
-4. The full conversation history is sent to Claude on every turn, enabling coherent multi-turn dialogue.
+1. Every message is sent through a fast classifier call (`max_tokens=10`) that asks Claude to label it **SEARCH**, **FOLLOWUP**, or **UNCLEAR**.
+   - On the first message, only **SEARCH** or **UNCLEAR** are valid (nothing to follow up on yet).
+2. If **SEARCH**: a second quick call extracts and translates the user's topic into a concise English ArXiv query, then the top 5 most relevant papers are fetched and injected as context.
+3. If **FOLLOWUP**: the message is passed straight to Claude with the existing conversation history.
+4. If **UNCLEAR**: the message is passed to Claude without a search, so it can ask the user for clarification.
+5. The full conversation history is sent to Claude on every turn, enabling coherent multi-turn dialogue.
+6. The system prompt includes today's date so Claude can reason accurately about paper recency.

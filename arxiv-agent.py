@@ -14,6 +14,7 @@ touching the agent logic.
 
 import arxiv
 import anthropic
+from datetime import date
 from dotenv import load_dotenv
 
 # Load ANTHROPIC_API_KEY from the .env file
@@ -76,6 +77,7 @@ def _build_system_prompt(language: str) -> str:
     language : 'en' for English, 'cs' for Czech
     """
     base = (
+        f"Today's date is {date.today()}.\n\n"
         "You are a helpful research assistant that specialises in academic papers from ArXiv.\n\n"
         "When the user asks about a topic, you will be given relevant paper summaries as "
         "context. Use those papers to give accurate, well-organised answers.\n\n"
@@ -145,20 +147,25 @@ class ResearchAgent:
 
         Steps
         -----
-        1. Decide if we need a fresh ArXiv search.
-        2. If yes, search and prepend the results to the user message.
+        1. Classify the message as SEARCH, FOLLOWUP, or UNCLEAR.
+        2. If SEARCH: translate to an English query, call search_arxiv(), and
+           prepend the results as context.
+           If FOLLOWUP or UNCLEAR: use the message as-is (no search).
         3. Append the (possibly enriched) message to history.
         4. Call Claude with the full history.
         5. Append Claude's reply to history.
         6. Return Claude's reply.
         """
-        # Step 1 — should we search?
-        if self._needs_new_search(user_message):
-            # Extract the core topic from the message and search
-            papers = search_arxiv(user_message, max_results=5)
+        # Step 1 — classify the message
+        intent = self._classify_message(user_message)
+
+        if intent == "SEARCH":
+            # Step 2a — get an English query for ArXiv (translates if necessary)
+            search_query = self._to_english_query(user_message)
+            papers = search_arxiv(search_query, max_results=5)
 
             if papers:
-                # Step 2 — format papers as a readable context block
+                # Format papers as a readable context block
                 context_block = self._format_papers(papers)
                 enriched_message = (
                     f"{user_message}\n\n"
@@ -171,7 +178,8 @@ class ResearchAgent:
                     "[No ArXiv papers were found for this query.]"
                 )
         else:
-            # Step 2 (skip) — just use the message as-is
+            # Step 2b — FOLLOWUP or UNCLEAR: pass message straight through.
+            # For UNCLEAR, Claude will ask the user for clarification on its own.
             enriched_message = user_message
 
         # Step 3 — add user turn to history
@@ -202,30 +210,76 @@ class ResearchAgent:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _needs_new_search(self, message: str) -> bool:
+    def _to_english_query(self, message: str) -> str:
         """
-        Ask Claude whether the user's message requires a fresh ArXiv search.
+        Extract a short, English-language ArXiv search query from *message*.
 
-        Claude replies with exactly one word — 'SEARCH' or 'FOLLOWUP' — so
-        we use max_tokens=10 to keep this call fast and cheap.
+        If the message is already in English this typically returns the key
+        topic words unchanged.  If it is in another language (e.g. Czech),
+        Claude translates and distils it into a concise English query.
 
-        If no papers are in context yet we skip the call entirely and always
-        search (there is nothing to follow up on).
+        A low max_tokens value keeps this call fast and cheap.
+        """
+        prompt = (
+            "Extract the core academic search topic from the user's message and "
+            "express it as a short English query suitable for searching ArXiv "
+            "(2–6 words, no punctuation, no filler words).\n"
+            "If the message is not in English, translate the topic to English first.\n\n"
+            f"User message: \"{message}\"\n\n"
+            "Reply with only the search query, nothing else."
+        )
+
+        response = self._client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=30,          # a short query is all we need
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        return response.content[0].text.strip()
+
+    def _classify_message(self, message: str) -> str:
+        """
+        Ask Claude to classify the user's message into one of three categories.
+
+        Returns
+        -------
+        'SEARCH'   — the user is asking about a new topic; do a fresh ArXiv search.
+        'FOLLOWUP' — the user is asking a follow-up about papers already in context.
+        'UNCLEAR'  — the message is gibberish, too vague, or lacks a real topic;
+                     skip the search and let Claude ask for clarification.
+
+        Uses max_tokens=10 to keep this call fast and cheap.
+
+        When no papers are in context yet (first message), only SEARCH and UNCLEAR
+        are offered — FOLLOWUP makes no sense before any papers have been found.
         """
         if not self._has_paper_context:
-            # No papers loaded yet — first message must always be a search.
-            return True
-
-        # Build a minimal prompt that gives Claude just enough context.
-        classification_prompt = (
-            "You are a routing assistant. "
-            "The user is chatting with a research tool that can search ArXiv for papers.\n"
-            "Papers from a previous search are already available in the conversation.\n\n"
-            f"User message: \"{message}\"\n\n"
-            "Does this message ask about a NEW topic that needs a fresh ArXiv search, "
-            "or is it a follow-up question about the papers already found?\n"
-            "Reply with exactly one word: SEARCH or FOLLOWUP."
-        )
+            # First message: no prior papers, so FOLLOWUP is not a valid option.
+            classification_prompt = (
+                "You are a routing assistant for a research tool that searches ArXiv.\n"
+                "This is the user's first message; no papers have been found yet.\n\n"
+                f"User message: \"{message}\"\n\n"
+                "Classify this message into exactly one of these two categories:\n"
+                "  SEARCH  — the user is asking about a topic and wants papers found.\n"
+                "  UNCLEAR — the message is gibberish, too vague, or contains no real topic to search for.\n\n"
+                "Reply with exactly one word: SEARCH or UNCLEAR."
+            )
+            valid_verdicts = {"SEARCH", "UNCLEAR"}
+            default = "UNCLEAR"
+        else:
+            # Subsequent messages: all three options are available.
+            classification_prompt = (
+                "You are a routing assistant for a research tool that searches ArXiv.\n"
+                "Papers from a previous search are already available in the conversation.\n\n"
+                f"User message: \"{message}\"\n\n"
+                "Classify this message into exactly one of these three categories:\n"
+                "  SEARCH   — the user is asking about a NEW topic and needs a fresh ArXiv search.\n"
+                "  FOLLOWUP — the user is asking a follow-up question about the papers already found.\n"
+                "  UNCLEAR  — the message is gibberish, too vague, or contains no real topic to search for.\n\n"
+                "Reply with exactly one word: SEARCH, FOLLOWUP, or UNCLEAR."
+            )
+            valid_verdicts = {"SEARCH", "FOLLOWUP", "UNCLEAR"}
+            default = "FOLLOWUP"
 
         response = self._client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -234,7 +288,8 @@ class ResearchAgent:
         )
 
         verdict = response.content[0].text.strip().upper()
-        return verdict == "SEARCH"
+        # Guard against unexpected output by falling back to the safe default.
+        return verdict if verdict in valid_verdicts else default
 
     @staticmethod
     def _format_papers(papers: list[dict]) -> str:
