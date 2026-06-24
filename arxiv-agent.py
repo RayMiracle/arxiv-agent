@@ -12,9 +12,12 @@ This separation means you can swap main() for a web UI later without
 touching the agent logic.
 """
 
+import json
+import re
 import arxiv
 import anthropic
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Load ANTHROPIC_API_KEY from the .env file
@@ -314,27 +317,264 @@ class ResearchAgent:
 
 
 # ---------------------------------------------------------------------------
-# 3. CLI interface
+# 3. Conversation persistence
+# ---------------------------------------------------------------------------
+
+# conversations.json lives in the same folder as this script
+_CONV_FILE = Path(__file__).parent / "conversations-history.json"
+
+# Maximum number of saved conversations to keep on disk
+_MAX_CONVERSATIONS = 12
+
+
+def _load_conversations() -> list[dict]:
+    """
+    Load saved conversations from the JSON file.
+    Returns an empty list if the file does not exist or is unreadable.
+    """
+    if not _CONV_FILE.exists():
+        return []
+    try:
+        with open(_CONV_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        # File is corrupted or unreadable — start fresh rather than crashing
+        return []
+
+
+def _save_conversations(conversations: list[dict]) -> None:
+    """
+    Write conversations to the JSON file.
+
+    If there are more than _MAX_CONVERSATIONS entries, the oldest ones
+    (sorted by timestamp) are dropped so only the newest are kept.
+    """
+    # Sort oldest-first; slicing from the end keeps the most recent ones
+    conversations.sort(key=lambda c: c["timestamp"])
+    trimmed = conversations[-_MAX_CONVERSATIONS:]
+    with open(_CONV_FILE, "w", encoding="utf-8") as f:
+        json.dump(trimmed, f, ensure_ascii=False, indent=2)
+
+
+def _generate_topic_summary(
+    client: anthropic.Anthropic,
+    history: list[dict],
+    language: str,
+) -> str:
+    """
+    Ask Claude to produce a short (5–10 word) English label for the conversation.
+    This is used as the display name in the menu and as part of the export filename.
+    """
+    # Using only the first user message keeps the prompt tiny and cheap
+    first_user_text = next(
+        (m["content"] for m in history if m["role"] == "user"), ""
+    )
+    # Strip the injected ArXiv block so Claude sees a clean message
+    first_user_text = first_user_text.split("[ArXiv search results")[0].strip()
+
+    prompt = (
+        "Summarise the topic of this research conversation in 5–10 words "
+        "(no punctuation at the end, always write in English).\n\n"
+        f"First user message: \"{first_user_text[:300]}\"\n\n"
+        "Reply with only the topic summary."
+    )
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=25,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text.strip()
+
+
+def _generate_resume_summary(
+    client: anthropic.Anthropic,
+    history: list[dict],
+    language: str,
+) -> str:
+    """
+    Ask Claude for a 2–4 sentence summary of a saved conversation.
+    Displayed to the user when they choose to resume a previous session.
+    The summary is written in the same language as the conversation.
+    """
+    # Build a short transcript from the first 10 messages to keep the call cheap
+    lines = []
+    for msg in history[:10]:
+        role = "User" if msg["role"] == "user" else "Assistant"
+        # Strip the injected ArXiv block — it's noise for a summary
+        content = msg["content"].split("[ArXiv search results")[0].strip()
+        lines.append(f"{role}: {content[:200]}")
+    transcript = "\n".join(lines)
+
+    lang_instruction = (
+        "Odpověz v češtině." if language == "cs" else "Reply in English."
+    )
+    prompt = (
+        f"{lang_instruction}\n"
+        "Write a 2–4 sentence summary of what was discussed in this research "
+        "conversation. Mention the main topic and any key papers or findings.\n\n"
+        f"Conversation excerpt:\n{transcript}\n\n"
+        "Summary:"
+    )
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text.strip()
+
+
+def _export_to_markdown(conv: dict, folder: Path) -> str:
+    """
+    Write a conversation to a Markdown file in *folder*.
+
+    The filename is derived from the topic summary and conversation timestamp
+    so it is human-readable and unique.
+
+    Returns the filename (not the full path) that was written.
+    """
+    # Build a filesystem-safe filename from the topic and timestamp
+    safe_topic = re.sub(r"[^\w\s-]", "", conv.get("topic_summary", "conversation"))
+    safe_topic = re.sub(r"\s+", "_", safe_topic).strip("_")[:50]
+    ts = conv["timestamp"][:16].replace(":", "-").replace("T", "_")
+    filename = f"{safe_topic}_{ts}-export.md"
+    filepath = folder / filename
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        # Header block
+        f.write(f"# {conv.get('topic_summary', 'Research Conversation')}\n\n")
+        f.write(f"**Date:** {conv['timestamp'][:10]}  \n")
+        f.write(
+            f"**Language:** {'Czech' if conv['language'] == 'cs' else 'English'}\n\n"
+        )
+        f.write("---\n\n")
+
+        # One section per message
+        for msg in conv["history"]:
+            if msg["role"] == "user":
+                # Hide the injected ArXiv block — it clutters the exported doc
+                content = msg["content"].split("[ArXiv search results")[0].strip()
+                f.write(f"## You\n\n{content}\n\n---\n\n")
+            else:
+                f.write(f"## Assistant\n\n{msg['content']}\n\n---\n\n")
+
+    return filename
+
+
+def _show_startup_menu(
+    language: str,
+    conversations: list[dict],
+    client: anthropic.Anthropic,
+    folder: Path,
+) -> tuple:
+    """
+    Display the saved-conversations menu at startup.
+
+    The user can:
+      - Enter a number to resume a conversation
+      - Press N to start a new one
+      - Press D to delete a saved conversation
+      - Press E to export a saved conversation to Markdown
+
+    Returns a tuple (action, conv_or_None) where action is "new" or "resume".
+    """
+    # Bilingual labels — index 0 = English, index 1 = Czech
+    i = 0 if language == "en" else 1
+
+    while True:
+        print()
+        print(("Saved conversations:", "Uložené konverzace:")[i])
+        for idx, conv in enumerate(conversations, start=1):
+            # Show a human-friendly timestamp (strip the T separator)
+            ts = conv["timestamp"][:16].replace("T", " ")
+            print(f"  {idx}. {ts} — {conv.get('topic_summary', '?')}")
+
+        print()
+        print(("Options:", "Možnosti:")[i])
+        print(("  N — New conversation",          "  N — Nová konverzace")[i])
+        print(("  D — Delete a conversation",     "  D — Smazat konverzaci")[i])
+        print(("  E — Export to Markdown",         "  E — Exportovat do Markdown")[i])
+        print(("  Or enter a number to resume",   "  nebo zadejte číslo pro pokračování")[i])
+        print()
+
+        choice = input(("Your choice: ", "Váš výběr: ")[i]).strip().lower()
+
+        # ── New conversation ────────────────────────────────────────────
+        if choice == "n":
+            return ("new", None)
+
+        # ── Delete ──────────────────────────────────────────────────────
+        elif choice == "d":
+            raw = input(
+                ("Enter number to delete: ", "Zadejte číslo ke smazání: ")[i]
+            ).strip()
+            if not raw.isdigit() or not (1 <= int(raw) <= len(conversations)):
+                print(("Invalid number.", "Neplatné číslo.")[i])
+                continue
+            num = int(raw) - 1
+            confirm = input(
+                ("Are you sure? (y/n): ", "Jste si jistý/á? (a/n): ")[i]
+            ).strip().lower()
+            yes_answers = ({"y"}, {"a", "y"})[i]
+            if confirm in yes_answers:
+                conversations.pop(num)
+                _save_conversations(conversations)
+                print(("Deleted.", "Smazáno.")[i])
+                if not conversations:
+                    # No conversations left — go straight to new
+                    return ("new", None)
+            else:
+                print(("Cancelled.", "Zrušeno.")[i])
+
+        # ── Export ──────────────────────────────────────────────────────
+        elif choice == "e":
+            raw = input(
+                ("Enter number to export: ", "Zadejte číslo pro export: ")[i]
+            ).strip()
+            if not raw.isdigit() or not (1 <= int(raw) <= len(conversations)):
+                print(("Invalid number.", "Neplatné číslo.")[i])
+                continue
+            num = int(raw) - 1
+            conv = conversations[num]
+            # Generate topic_summary on-the-fly if it is missing
+            if not conv.get("topic_summary"):
+                conv["topic_summary"] = _generate_topic_summary(
+                    client, conv["history"], conv["language"]
+                )
+            filename = _export_to_markdown(conv, folder)
+            print(("Exported to: ", "Exportováno do: ")[i] + filename)
+
+        # ── Resume by number ────────────────────────────────────────────
+        elif choice.isdigit() and 1 <= int(choice) <= len(conversations):
+            return ("resume", conversations[int(choice) - 1])
+
+        else:
+            print(("Invalid choice, try again.", "Neplatná volba, zkuste znovu.")[i])
+
+
+# ---------------------------------------------------------------------------
+# 4. CLI interface
 # ---------------------------------------------------------------------------
 
 def main():
     """
     Run the interactive command-line research assistant.
 
-    The agent and the conversation live only in this function — if you later
-    build a web UI, you would create a ResearchAgent per user session there
-    instead, without touching the class itself.
+    The agent and all conversation state live only in this function.
+    To add a web UI later, create a ResearchAgent per user session and call
+    agent.ask() — no changes to the agent or persistence functions needed.
     """
+    script_folder = Path(__file__).parent  # used for JSON file and .md exports
+
     print("=" * 60)
     print("  ArXiv Research Assistant (powered by Claude)")
     print("=" * 60)
 
-    # --- Language selection ---
+    # --- Language selection -----------------------------------------------
     print("\nSelect language / Vyberte jazyk:")
     print("  1. English")
     print("  2. Czech (Čeština)")
 
-    language = "en"  # default
+    language = "en"
     while True:
         lang_choice = input("Your choice (1/2): ").strip()
         if lang_choice == "1":
@@ -346,49 +586,154 @@ def main():
         else:
             print("Please enter 1 or 2.")
 
-    print()
-    if language == "cs":
-        print("Jazyk nastaven na češtinu.")
-        print("Zeptejte se mě na výzkumné články. Napište 'exit', 'quit', 'konec' nebo 'ukončit' pro ukončení.")
-    else:
-        print("Ask me to find or explain research papers.")
-        print("Type 'exit' or 'quit' to leave.")
-    print()
+    # We need a client early because the startup menu may call Claude
+    client = anthropic.Anthropic()
 
+    # --- Startup menu (only shown when saved conversations exist) ----------
+    conversations = _load_conversations()
+    if conversations:
+        action, selected_conv = _show_startup_menu(
+            language, conversations, client, script_folder
+        )
+    else:
+        action, selected_conv = "new", None
+
+    # --- Set up the agent -------------------------------------------------
     agent = ResearchAgent(language=language)
 
-    while True:
-        # Prompt the user for input
-        try:
-            user_input = input("> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            # Handle Ctrl+D / Ctrl+C gracefully
-            print("\nGoodbye!")
-            break
+    if action == "resume" and selected_conv:
+        # Restore saved history and paper-context flag
+        conv_id        = selected_conv["id"]
+        conv_timestamp = selected_conv["timestamp"]
+        agent.history  = list(selected_conv["history"])
+        agent._has_paper_context = any(
+            "[ArXiv search results" in msg["content"]
+            for msg in agent.history
+            if msg["role"] == "user"
+        )
+        # Print a short recap so the user remembers where they left off
+        print()
+        print(
+            ("Generating conversation summary…",
+             "Načítám shrnutí konverzace…")[0 if language == "en" else 1]
+        )
+        summary = _generate_resume_summary(client, agent.history, language)
+        print()
+        print(summary)
+        print()
+    else:
+        # Fresh conversation — assign a new ID based on current time
+        now            = datetime.now()
+        conv_id        = now.strftime("%Y%m%d_%H%M%S")
+        conv_timestamp = now.isoformat()
 
-        # Skip empty input
-        if not user_input:
-            continue
+    # --- Print usage instructions -----------------------------------------
+    if language == "cs":
+        print("Zeptejte se mě na výzkumné články.")
+        print(
+            "Příkazy: 'export' (uložit do Markdown), "
+            "'exit' / 'quit' / 'konec' / 'ukončit' (pro ukončení programu)"
+        )
+    else:
+        print("Ask me to find or explain research papers.")
+        print("Commands: 'export' (save to Markdown),  'exit' / 'quit' (quit)")
+    print()
 
-        # Check for exit commands (English always accepted; Czech added when language is Czech)
-        exit_commands = {"exit", "quit"}
-        if language == "cs":
-            exit_commands |= {"konec", "ukončit"}
-        if user_input.lower() in exit_commands:
-            print("Goodbye!" if language == "en" else "Na shledanou!")
-            break
+    # Build the exit-command set (Czech extras added when language is Czech)
+    exit_commands = {"exit", "quit"}
+    if language == "cs":
+        exit_commands |= {"konec", "ukončit"}
 
-        # Send the message to the agent and print the response
-        print()  # blank line before the response
-        try:
-            reply = agent.ask(user_input)
-            print(reply)
-        except anthropic.APIError as e:
-            print(f"[API error] {e}")
-        except Exception as e:
-            print(f"[Unexpected error] {e}")
+    # Track whether the user exited explicitly (determines farewell message)
+    explicit_exit = False
 
-        print()  # blank line after the response
+    # --- Chat loop --------------------------------------------------------
+    try:
+        while True:
+            try:
+                user_input = input("> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                # Ctrl+D or Ctrl+C — no farewell, but we still save below
+                print()
+                break
+
+            if not user_input:
+                continue
+
+            # Explicit exit command
+            if user_input.lower() in exit_commands:
+                explicit_exit = True
+                break
+
+            # In-session export command
+            if user_input.lower() == "export":
+                if not agent.history:
+                    print(
+                        ("Nothing to export yet.",
+                         "Zatím není co exportovat.")[0 if language == "en" else 1]
+                    )
+                    continue
+                # Build a temporary conv dict to pass to the exporter
+                topic = _generate_topic_summary(client, agent.history, language)
+                temp_conv = {
+                    "id":            conv_id,
+                    "timestamp":     conv_timestamp,
+                    "language":      language,
+                    "topic_summary": topic,
+                    "history":       agent.history,
+                }
+                filename = _export_to_markdown(temp_conv, script_folder)
+                label = ("Exported to: ", "Exportováno do: ")[0 if language == "en" else 1]
+                print(f"{label}{filename}")
+                print()
+                continue
+
+            # Normal chat turn
+            print()
+            try:
+                reply = agent.ask(user_input)
+                print(reply)
+            except anthropic.APIError as e:
+                print(f"[API error] {e}")
+            except Exception as e:
+                print(f"[Unexpected error] {e}")
+
+            print()
+
+    finally:
+        # --- Save conversation on every exit path -------------------------
+        # Only skip saving if the user never sent a single message
+        if agent.history:
+            print(
+                ("Saving conversation…",
+                 "Ukládám konverzaci…")[0 if language == "en" else 1]
+            )
+            topic = _generate_topic_summary(client, agent.history, language)
+            updated_conv = {
+                "id":            conv_id,
+                "timestamp":     conv_timestamp,
+                "language":      language,
+                "topic_summary": topic,
+                "history":       agent.history,
+            }
+            # Replace the existing entry when resuming, otherwise append
+            existing_idx = next(
+                (i for i, c in enumerate(conversations) if c["id"] == conv_id),
+                None,
+            )
+            if existing_idx is not None:
+                conversations[existing_idx] = updated_conv
+            else:
+                conversations.append(updated_conv)
+            _save_conversations(conversations)
+            print(
+                ("Saved as: ", "Uloženo jako: ")[0 if language == "en" else 1]
+                + topic
+            )
+
+    # Farewell message — only for explicit exit commands, not Ctrl+C/Ctrl+D
+    if explicit_exit:
+        print("Goodbye!" if language == "en" else "Na shledanou!")
 
 
 # ---------------------------------------------------------------------------
@@ -397,3 +742,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -1,2 +1,6 @@
 .env
 venv/
+
+# Conversation history and exports
+conversations-history.json
+*-export.md
