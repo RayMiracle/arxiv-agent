@@ -166,8 +166,9 @@ In Czech mode, accepted exit commands are: `exit`, `quit`, `konec`, `ukončit`.
 6. The system prompt includes today's date so Claude can reason accurately about paper recency.
 
 **Persistence (every session)**
-7. Conversations are saved to `conversations-history.json` automatically on exit — whether via an exit command or Ctrl+C/D.
-8. On startup, if saved conversations exist, a menu lets you resume, delete, or export them.
-9. Resuming loads the full history and generates a short AI summary of what was previously discussed.
-10. Exporting writes a clean Markdown file (ArXiv context blocks stripped) named `{topic}_{timestamp}-export.md`.
-11. At most 12 conversations are kept; oldest are dropped when a 13th is saved.
+
+1. Conversations are saved to `conversations-history.json` automatically on exit — whether via an exit command or Ctrl+C/D.
+2. On startup, if saved conversations exist, a menu lets you resume, delete, or export them.
+3. Resuming loads the full history and generates a short AI summary of what was previously discussed.
+4. Exporting writes a clean Markdown file (ArXiv context blocks stripped) named `{topic}_{timestamp}-export.md`.
+5. At most 12 conversations are kept; oldest are dropped when a 13th is saved.
