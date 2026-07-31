@@ -21,6 +21,12 @@ An interactive CLI tool that uses Claude to help you explore academic papers fro
   - Stores up to 12 conversations; oldest are dropped automatically
 - Powered by Claude (`claude-haiku-4-5-20251001`)
 
+## AI disclosure (EU AI Act, Article 50)
+
+This is a conversational AI tool. A startup banner discloses that answers are
+AI-generated (Claude) and may be incomplete or inaccurate, and recommends verifying
+against the cited papers — see the `main()` function in `arxiv-agent.py`.
+
 ## What You Can Search For
 
 ArXiv hosts over 2 million open-access academic papers across eight major fields:
