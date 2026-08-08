@@ -246,11 +246,23 @@ if st.session_state.last_papers:
 
 # Export current session
 if st.session_state.agent.history:
+    # Reuse the real topic summary if this session has already been saved
+    # (matches the filename export from Saved conversations); otherwise
+    # generate one now so the filename isn't just "conversation".
+    saved_match = next(
+        (c for c in load_conversations() if c["id"] == st.session_state.conv_id),
+        None,
+    )
+    export_topic = (
+        saved_match["topic_summary"]
+        if saved_match
+        else generate_topic_summary(client, st.session_state.agent.history, st.session_state.language)
+    )
     temp_conv = {
         "id": st.session_state.conv_id,
         "timestamp": st.session_state.conv_timestamp,
         "language": st.session_state.language,
-        "topic_summary": "conversation",
+        "topic_summary": export_topic,
         "history": st.session_state.agent.history,
     }
     st.download_button(
