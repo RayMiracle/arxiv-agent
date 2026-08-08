@@ -212,7 +212,6 @@ if st.session_state.last_papers:
             st.markdown(f"**Authors:** {authors}")
             st.markdown(f"**Published:** {paper['published']}")
             st.markdown(f"**Link:** {paper['url']}")
-            st.markdown(paper["summary"])
 
 # Export current session
 if st.session_state.agent.history:
