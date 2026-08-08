@@ -20,6 +20,8 @@ available as both a CLI and a Streamlit web UI.
   - Export any conversation to a Markdown file
   - Type `export` at any time during a chat to export the current session
   - Stores up to 12 conversations; oldest are dropped automatically
+- **LLM usage tracking** — every Claude API call is logged to `usage-log.jsonl` with token counts and estimated USD cost
+  - The Streamlit sidebar shows the current session's running cost and an all-time total (by call type)
 - Powered by Claude (`claude-haiku-4-5-20251001`)
 
 ## AI disclosure (EU AI Act, Article 50)
@@ -199,3 +201,5 @@ In Czech mode, accepted exit commands are: `exit`, `quit`, `konec`, `ukončit`.
 3. Resuming loads the full history and generates a short AI summary of what was previously discussed.
 4. Exporting writes a clean Markdown file (ArXiv context blocks stripped) named `{topic}_{timestamp}-export.md`.
 5. At most 12 conversations are kept; oldest are dropped when a 13th is saved.
+
+`conversations-history.json`, any `*export*` Markdown file, and `usage-log.jsonl` (LLM usage log — see Features above) are local, per-user data and are excluded from version control via `.gitignore`.
