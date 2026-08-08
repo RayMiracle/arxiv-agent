@@ -8,6 +8,8 @@ a conversation started in one can be resumed in the other.
 Run with:  streamlit run app_streamlit.py
 """
 
+import re
+
 import anthropic
 import streamlit as st
 from datetime import datetime
@@ -26,6 +28,20 @@ from core import (
 SCRIPT_FOLDER = Path(__file__).parent
 
 st.set_page_config(page_title="ArXiv Research Assistant", page_icon="📚")
+
+
+def _tame_headings(text: str) -> str:
+    """
+    Demote Markdown headings so Claude's replies never render as giant page
+    titles inside a chat bubble. '#'/'##'/'###' (page/section-title sized)
+    become '####'/'#####' (small sub-heading sized); anything already at
+    '####'+ is left alone.
+    """
+    def demote(match: re.Match) -> str:
+        hashes = match.group(1)
+        return "#" * min(len(hashes) + 3, 6) + " "
+
+    return re.sub(r"^(#{1,3}) ", demote, text, flags=re.MULTILINE)
 
 
 # ---------------------------------------------------------------------------
@@ -136,19 +152,19 @@ with st.sidebar:
         for conv in sorted(saved, key=lambda c: c["timestamp"], reverse=True):
             ts = conv["timestamp"][:16].replace("T", " ")
             with st.expander(f"{ts} — {conv.get('topic_summary', '?')}"):
-                col1, col2, col3 = st.columns(3)
-                if col1.button("Resume", key=f"resume_{conv['id']}"):
+                if st.button("Resume", key=f"resume_{conv['id']}", use_container_width=True):
                     _resume_conversation(conv, client)
                     st.rerun()
-                if col2.button("Delete", key=f"delete_{conv['id']}"):
-                    st.session_state[f"confirm_delete_{conv['id']}"] = True
-                col3.download_button(
+                st.download_button(
                     "Export",
                     data=render_conversation_markdown(conv),
                     file_name=export_filename(conv),
                     mime="text/markdown",
                     key=f"export_{conv['id']}",
+                    use_container_width=True,
                 )
+                if st.button("Delete", key=f"delete_{conv['id']}", use_container_width=True):
+                    st.session_state[f"confirm_delete_{conv['id']}"] = True
                 if st.session_state.get(f"confirm_delete_{conv['id']}"):
                     st.warning("Delete this conversation?")
                     if st.button("Confirm delete", key=f"confirm_{conv['id']}"):
@@ -171,7 +187,7 @@ st.info(
 )
 
 if st.session_state.resume_summary:
-    st.info(st.session_state.resume_summary)
+    st.info(_tame_headings(st.session_state.resume_summary))
 
 # Render chat history (strip the injected ArXiv context block, same as the
 # Markdown exporter does, so the raw search payload isn't shown to the user)
@@ -180,6 +196,8 @@ for msg in st.session_state.agent.history:
     content = msg["content"]
     if role == "user":
         content = content.split("[ArXiv search results")[0].strip()
+    else:
+        content = _tame_headings(content)
     with st.chat_message(role):
         st.markdown(content)
 
@@ -214,10 +232,19 @@ if st.session_state.agent.history:
 
 user_input = st.chat_input("Ask me to find or explain research papers...")
 if user_input:
-    try:
-        reply, papers = st.session_state.agent.ask(user_input)
-        st.session_state.last_papers = papers
-    except anthropic.APIError as e:
-        reply, papers = f"[API error] {e}", None
+    # Show the user's message right away — agent.ask() can take several
+    # seconds (classification + possible ArXiv search + Claude reply), and
+    # without this the UI looks frozen with no sign the input was received.
+    with st.chat_message("user"):
+        st.markdown(user_input)
+    with st.chat_message("assistant"):
+        with st.spinner("Searching ArXiv and thinking…"):
+            try:
+                reply, papers = st.session_state.agent.ask(user_input)
+                st.session_state.last_papers = papers
+            except anthropic.APIError as e:
+                reply, papers = f"[API error] {e}", None
+                st.session_state.last_papers = None
+        st.markdown(_tame_headings(reply))
     _persist_current_conversation(client)
     st.rerun()

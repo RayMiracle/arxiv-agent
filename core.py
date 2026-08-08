@@ -90,6 +90,10 @@ def _build_system_prompt(language: str) -> str:
         "- If the context does not contain enough information to answer, say so clearly.\n"
         "- Keep explanations accessible — avoid unnecessary jargon.\n"
         "- For follow-up questions, use the papers already in the conversation.\n"
+        "- Formatting: you may use Markdown, but keep it light. Use bold text or "
+        "small '###' sub-headings for structure — never '#' or '##', which render "
+        "as oversized page titles in the UI. Prefer short paragraphs and bullet "
+        "lists over deep heading hierarchies.\n"
     )
 
     if language == "cs":
