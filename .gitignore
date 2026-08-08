@@ -6,3 +6,4 @@ __pycache__/
 # Conversation history and exports
 conversations-history.json
 *-export.md
+usage-log.jsonl

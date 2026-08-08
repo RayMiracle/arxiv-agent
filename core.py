@@ -15,6 +15,7 @@ Neither this module nor anything it imports performs any CLI or web I/O
 
 import json
 import re
+import threading
 import arxiv
 import anthropic
 from datetime import date, datetime
@@ -23,6 +24,93 @@ from dotenv import load_dotenv
 
 # Load ANTHROPIC_API_KEY from the .env file
 load_dotenv()
+
+_MODEL = "claude-haiku-4-5-20251001"
+
+# claude-haiku-4-5 pricing, USD per token (list rate: $1.00 / $5.00 per 1M tokens)
+_PRICE_PER_INPUT_TOKEN = 1.00 / 1_000_000
+_PRICE_PER_OUTPUT_TOKEN = 5.00 / 1_000_000
+
+
+# ---------------------------------------------------------------------------
+# 0. LLM usage tracking (cost visibility)
+# ---------------------------------------------------------------------------
+
+# usage-log.jsonl lives in the same folder as this module — one JSON line per
+# Claude API call, so the log is append-only and safe to tail/parse per-line.
+_USAGE_LOG_FILE = Path(__file__).parent / "usage-log.jsonl"
+
+# Running total for the current process (CLI run or Streamlit server process).
+# Streamlit reruns the whole script per interaction but keeps the process
+# alive, so this persists across reruns within one server session.
+_session_usage_lock = threading.Lock()
+_session_usage = {
+    "call_count": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_usd": 0.0,
+}
+
+
+def _record_usage(call_type: str, response) -> None:
+    """
+    Record token usage and cost for one Claude API call.
+
+    Updates the in-process running total (see get_session_usage()) and
+    appends a line to usage-log.jsonl for durable, cross-session history.
+    """
+    input_tokens = response.usage.input_tokens
+    output_tokens = response.usage.output_tokens
+    cost_usd = (
+        input_tokens * _PRICE_PER_INPUT_TOKEN
+        + output_tokens * _PRICE_PER_OUTPUT_TOKEN
+    )
+
+    with _session_usage_lock:
+        _session_usage["call_count"] += 1
+        _session_usage["input_tokens"] += input_tokens
+        _session_usage["output_tokens"] += output_tokens
+        _session_usage["cost_usd"] += cost_usd
+
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "call_type": call_type,       # e.g. "classify", "search_query", "ask", "topic_summary"
+        "model": _MODEL,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost_usd": round(cost_usd, 6),
+    }
+    with open(_USAGE_LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def get_session_usage() -> dict:
+    """
+    Return a snapshot of this process's cumulative usage so far:
+    {call_count, input_tokens, output_tokens, cost_usd}.
+    """
+    with _session_usage_lock:
+        return dict(_session_usage)
+
+
+def load_usage_log() -> list[dict]:
+    """
+    Load the full usage log from disk (all calls ever made, across sessions).
+    Returns an empty list if the file does not exist or is unreadable.
+    """
+    if not _USAGE_LOG_FILE.exists():
+        return []
+    entries = []
+    with open(_USAGE_LOG_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue  # skip a corrupted line rather than failing the whole log
+    return entries
 
 
 # ---------------------------------------------------------------------------
@@ -206,11 +294,12 @@ class ResearchAgent:
 
         # Step 4 — call Claude
         response = self._client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=_MODEL,
             max_tokens=1024,
             system=self._system_prompt,   # built from the chosen language
             messages=self.history,
         )
+        _record_usage("ask", response)
 
         assistant_reply = response.content[0].text
 
@@ -249,10 +338,11 @@ class ResearchAgent:
         )
 
         response = self._client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=_MODEL,
             max_tokens=30,          # a short query is all we need
             messages=[{"role": "user", "content": prompt}],
         )
+        _record_usage("search_query", response)
 
         return response.content[0].text.strip()
 
@@ -301,10 +391,11 @@ class ResearchAgent:
             default = "FOLLOWUP"
 
         response = self._client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=_MODEL,
             max_tokens=10,          # we only need one word
             messages=[{"role": "user", "content": classification_prompt}],
         )
+        _record_usage("classify", response)
 
         verdict = response.content[0].text.strip().upper()
         # Guard against unexpected output by falling back to the safe default.
@@ -395,10 +486,11 @@ def generate_topic_summary(
         "Reply with only the topic summary."
     )
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=_MODEL,
         max_tokens=25,
         messages=[{"role": "user", "content": prompt}],
     )
+    _record_usage("topic_summary", response)
     return response.content[0].text.strip()
 
 
@@ -432,10 +524,11 @@ def generate_resume_summary(
         "Summary:"
     )
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=_MODEL,
         max_tokens=300,
         messages=[{"role": "user", "content": prompt}],
     )
+    _record_usage("resume_summary", response)
     return response.content[0].text.strip()
 
 

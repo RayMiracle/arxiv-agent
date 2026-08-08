@@ -23,6 +23,8 @@ from core import (
     generate_resume_summary,
     render_conversation_markdown,
     export_filename,
+    get_session_usage,
+    load_usage_log,
 )
 
 SCRIPT_FOLDER = Path(__file__).parent
@@ -172,6 +174,36 @@ with st.sidebar:
                         save_conversations(remaining)
                         del st.session_state[f"confirm_delete_{conv['id']}"]
                         st.rerun()
+
+    st.divider()
+    st.subheader("LLM usage")
+
+    session_usage = get_session_usage()
+    st.metric("This session's cost", f"${session_usage['cost_usd']:.4f}")
+    col1, col2 = st.columns(2)
+    col1.caption(f"{session_usage['call_count']} calls")
+    col2.caption(
+        f"{session_usage['input_tokens']:,} in / {session_usage['output_tokens']:,} out"
+    )
+
+    with st.expander("All-time usage"):
+        all_time = load_usage_log()
+        if not all_time:
+            st.caption("No usage recorded yet.")
+        else:
+            total_cost = sum(e["cost_usd"] for e in all_time)
+            total_in = sum(e["input_tokens"] for e in all_time)
+            total_out = sum(e["output_tokens"] for e in all_time)
+            st.write(f"**Total cost:** ${total_cost:.4f}")
+            st.write(f"**Calls:** {len(all_time)}")
+            st.write(f"**Tokens:** {total_in:,} in / {total_out:,} out")
+
+            by_type: dict[str, float] = {}
+            for entry in all_time:
+                by_type[entry["call_type"]] = by_type.get(entry["call_type"], 0.0) + entry["cost_usd"]
+            st.caption("By call type:")
+            for call_type, cost in sorted(by_type.items(), key=lambda kv: kv[1], reverse=True):
+                st.caption(f"  {call_type}: ${cost:.4f}")
 
 
 # ---------------------------------------------------------------------------
