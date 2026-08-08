@@ -1,6 +1,42 @@
 # ArXiv Research Assistant
 
-An interactive CLI tool that uses Claude to help you explore academic papers from ArXiv.
+An interactive tool that uses Claude to help you explore academic papers from ArXiv,
+available as both a CLI and a Streamlit web UI.
+
+## Why this instead of plain ChatGPT/Claude chat?
+
+A general chat model without search answers **from its training data** — it has no
+access to current ArXiv papers and can hallucinate citations or claims, especially
+for recent or narrow topics.
+
+This agent instead:
+
+- **Actually searches ArXiv** on every new question (`search_arxiv()`) and fetches the
+  5 most relevant, real, current papers
+- Feeds their abstracts into Claude as context, so answers are grounded in **real,
+  verifiable sources** — with titles, authors, dates, and links — instead of the
+  model's memory
+- Cites specific paper titles in its answers, so you can immediately look up the
+  original and verify the claim
+
+**Concrete benefits for a researcher:**
+
+1. **Currency** — finds a paper uploaded last week; a model without search may not
+   know it exists at all
+2. **Verifiability** — every claim is backed by a link to a specific paper (also shown
+   as cards with authors/date/link in the UI), instead of an unsourced general answer
+3. **Fast orientation in a new field** — instead of manually searching ArXiv and
+   reading a dozen abstracts, get a synthesis in seconds, with follow-up questions
+   ("which of these is best for a beginner?")
+4. **Continuity tied to concrete sources** — FOLLOWUP mode keeps the found papers in
+   context, so follow-up questions relate to specific articles, not the model's
+   general knowledge
+5. **Cost transparency** — see exactly what each query cost (see LLM usage tracking
+   below)
+
+In short: the difference between *"ask the model what it remembers"* and *"ask the
+model what actually exists on ArXiv right now, with evidence"* — for research work,
+that difference is what makes an answer trustworthy.
 
 ## Features
 
@@ -19,13 +55,16 @@ An interactive CLI tool that uses Claude to help you explore academic papers fro
   - Export any conversation to a Markdown file
   - Type `export` at any time during a chat to export the current session
   - Stores up to 12 conversations; oldest are dropped automatically
+- **LLM usage tracking** — every Claude API call is logged to `usage-log.jsonl` with token counts and estimated USD cost
+  - The Streamlit sidebar shows the current session's running cost and an all-time total (by call type)
 - Powered by Claude (`claude-haiku-4-5-20251001`)
 
 ## AI disclosure (EU AI Act, Article 50)
 
-This is a conversational AI tool. A startup banner discloses that answers are
-AI-generated (Claude) and may be incomplete or inaccurate, and recommends verifying
-against the cited papers — see the `main()` function in `arxiv-agent.py`.
+This is a conversational AI tool. Answers are AI-generated (Claude) and may be
+incomplete or inaccurate — verify against the cited papers before relying on them.
+- CLI: a startup banner in `main()` (`arxiv-agent.py`) discloses this.
+- Web UI: an always-visible `st.info` banner at the top of the page (`app_streamlit.py`) discloses this.
 
 ## What You Can Search For
 
@@ -47,24 +86,30 @@ All papers on ArXiv are **open-access** — no subscription required.
 ## Architecture
 
 ```
-arxiv-agent.py
+core.py                   — Shared logic, used by both the CLI and the web UI
 ├── search_arxiv()        — Pure data function; queries ArXiv, no AI involved
 ├── _build_system_prompt()— Builds Claude's system prompt (language-aware, date-stamped)
 ├── ResearchAgent         — Core logic: Claude + search, no I/O
 │   ├── ask()             — Main entry point; classify → (translate+search) → respond
+│   │                        Returns (reply, papers) — papers is set on SEARCH turns
 │   ├── _classify_message()    — SEARCH / FOLLOWUP / UNCLEAR via Claude
 │   └── _to_english_query()    — Translates/extracts ArXiv search term
-├── Persistence layer     — conversations-history.json read/write, Markdown export
-│   ├── _load_conversations()  
-│   ├── _save_conversations()
-│   ├── _generate_topic_summary()
-│   ├── _generate_resume_summary()
-│   ├── _export_to_markdown()
-│   └── _show_startup_menu()
-└── main()                — CLI interface only; persistence wired here
+└── Persistence layer     — conversations-history.json read/write, Markdown export
+    ├── load_conversations()
+    ├── save_conversations()
+    ├── generate_topic_summary()
+    ├── generate_resume_summary()
+    ├── export_to_markdown()          — writes a .md file to disk (used by the CLI)
+    └── render_conversation_markdown()— returns .md content as a string (used by the web UI)
+
+arxiv-agent.py             — CLI interface only; imports core.py
+└── main(), _show_startup_menu()
+
+app_streamlit.py           — Streamlit web UI; imports core.py
 ```
 
-This separation makes it easy to swap the CLI (`main()`) for a web UI without touching the agent or persistence logic.
+Both interfaces share `conversations-history.json` — a conversation started in the
+CLI can be resumed in the web UI, and vice versa.
 
 ## Requirements
 
@@ -74,7 +119,7 @@ This separation makes it easy to swap the CLI (`main()`) for a web UI without to
 ## Installation
 
 ```bash
-pip install anthropic arxiv python-dotenv
+pip install -r requirements.txt
 ```
 
 ## Configuration
@@ -89,9 +134,22 @@ ANTHROPIC_API_KEY=your_api_key_here
 
 > **Note:** Make sure the virtual environment is activated first (`venv\Scripts\activate` on Windows), otherwise Python won't find the installed packages.
 
+### CLI
+
 ```bash
 python arxiv-agent.py
 ```
+
+### Web UI
+
+```bash
+streamlit run app_streamlit.py
+```
+
+Opens in your browser (default `http://localhost:8501`). Features mirror the CLI:
+language selection, chat with SEARCH/FOLLOWUP/UNCLEAR routing, fetched papers shown
+as expandable cards, a sidebar to resume/delete/export saved conversations, and a
+button to export the current session to Markdown.
 
 ### Example session
 
@@ -178,3 +236,5 @@ In Czech mode, accepted exit commands are: `exit`, `quit`, `konec`, `ukončit`.
 3. Resuming loads the full history and generates a short AI summary of what was previously discussed.
 4. Exporting writes a clean Markdown file (ArXiv context blocks stripped) named `{topic}_{timestamp}-export.md`.
 5. At most 12 conversations are kept; oldest are dropped when a 13th is saved.
+
+`conversations-history.json`, any `*export*` Markdown file, and `usage-log.jsonl` (LLM usage log — see Features above) are local, per-user data and are excluded from version control via `.gitignore`.
