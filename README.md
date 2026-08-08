@@ -3,6 +3,41 @@
 An interactive tool that uses Claude to help you explore academic papers from ArXiv,
 available as both a CLI and a Streamlit web UI.
 
+## Why this instead of plain ChatGPT/Claude chat?
+
+A general chat model without search answers **from its training data** — it has no
+access to current ArXiv papers and can hallucinate citations or claims, especially
+for recent or narrow topics.
+
+This agent instead:
+
+- **Actually searches ArXiv** on every new question (`search_arxiv()`) and fetches the
+  5 most relevant, real, current papers
+- Feeds their abstracts into Claude as context, so answers are grounded in **real,
+  verifiable sources** — with titles, authors, dates, and links — instead of the
+  model's memory
+- Cites specific paper titles in its answers, so you can immediately look up the
+  original and verify the claim
+
+**Concrete benefits for a researcher:**
+
+1. **Currency** — finds a paper uploaded last week; a model without search may not
+   know it exists at all
+2. **Verifiability** — every claim is backed by a link to a specific paper (also shown
+   as cards with authors/date/link in the UI), instead of an unsourced general answer
+3. **Fast orientation in a new field** — instead of manually searching ArXiv and
+   reading a dozen abstracts, get a synthesis in seconds, with follow-up questions
+   ("which of these is best for a beginner?")
+4. **Continuity tied to concrete sources** — FOLLOWUP mode keeps the found papers in
+   context, so follow-up questions relate to specific articles, not the model's
+   general knowledge
+5. **Cost transparency** — see exactly what each query cost (see LLM usage tracking
+   below)
+
+In short: the difference between *"ask the model what it remembers"* and *"ask the
+model what actually exists on ArXiv right now, with evidence"* — for research work,
+that difference is what makes an answer trustworthy.
+
 ## Features
 
 - Search ArXiv for papers on any topic
