@@ -179,11 +179,10 @@ with st.sidebar:
     st.subheader("LLM usage")
 
     session_usage = get_session_usage()
-    st.metric("This session's cost", f"${session_usage['cost_usd']:.4f}")
-    col1, col2 = st.columns(2)
-    col1.caption(f"{session_usage['call_count']} calls")
-    col2.caption(
-        f"{session_usage['input_tokens']:,} in / {session_usage['output_tokens']:,} out"
+    st.caption(
+        f"This session: **${session_usage['cost_usd']:.4f}** "
+        f"· {session_usage['call_count']} calls "
+        f"· {session_usage['input_tokens']:,} in / {session_usage['output_tokens']:,} out"
     )
 
     with st.expander("All-time usage"):
