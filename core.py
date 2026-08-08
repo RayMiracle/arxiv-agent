@@ -104,7 +104,11 @@ def _build_system_prompt(language: str) -> str:
             "- Use simple, clear Czech suitable for someone still learning the field.\n"
             "- Keep technical terms in English but add a brief Czech explanation in "
             "brackets immediately after, e.g. 'transformer (síť pro zpracování sekvencí)'.\n"
-            "- Paper titles and author names should be left in their original language."
+            "- Paper titles and author names should be left in their original language.\n"
+            "- The source abstracts may contain non-English, non-Czech text (e.g. "
+            "Cyrillic script). Never copy such fragments verbatim into your answer — "
+            "translate the meaning into Czech, except for proper nouns (author names, "
+            "paper titles) which stay as-is."
         )
 
     return base
