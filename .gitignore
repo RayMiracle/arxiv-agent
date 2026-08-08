@@ -4,5 +4,6 @@ __pycache__/
 .claude/
 
 # Conversation history and exports
+conversations-history.json
 *export*
 usage-log.jsonl
