@@ -1,6 +1,7 @@
 # ArXiv Research Assistant
 
-An interactive CLI tool that uses Claude to help you explore academic papers from ArXiv.
+An interactive tool that uses Claude to help you explore academic papers from ArXiv,
+available as both a CLI and a Streamlit web UI.
 
 ## Features
 
@@ -23,9 +24,10 @@ An interactive CLI tool that uses Claude to help you explore academic papers fro
 
 ## AI disclosure (EU AI Act, Article 50)
 
-This is a conversational AI tool. A startup banner discloses that answers are
-AI-generated (Claude) and may be incomplete or inaccurate, and recommends verifying
-against the cited papers — see the `main()` function in `arxiv-agent.py`.
+This is a conversational AI tool. Answers are AI-generated (Claude) and may be
+incomplete or inaccurate — verify against the cited papers before relying on them.
+- CLI: a startup banner in `main()` (`arxiv-agent.py`) discloses this.
+- Web UI: an always-visible `st.info` banner at the top of the page (`app_streamlit.py`) discloses this.
 
 ## What You Can Search For
 
@@ -47,24 +49,30 @@ All papers on ArXiv are **open-access** — no subscription required.
 ## Architecture
 
 ```
-arxiv-agent.py
+core.py                   — Shared logic, used by both the CLI and the web UI
 ├── search_arxiv()        — Pure data function; queries ArXiv, no AI involved
 ├── _build_system_prompt()— Builds Claude's system prompt (language-aware, date-stamped)
 ├── ResearchAgent         — Core logic: Claude + search, no I/O
 │   ├── ask()             — Main entry point; classify → (translate+search) → respond
+│   │                        Returns (reply, papers) — papers is set on SEARCH turns
 │   ├── _classify_message()    — SEARCH / FOLLOWUP / UNCLEAR via Claude
 │   └── _to_english_query()    — Translates/extracts ArXiv search term
-├── Persistence layer     — conversations-history.json read/write, Markdown export
-│   ├── _load_conversations()  
-│   ├── _save_conversations()
-│   ├── _generate_topic_summary()
-│   ├── _generate_resume_summary()
-│   ├── _export_to_markdown()
-│   └── _show_startup_menu()
-└── main()                — CLI interface only; persistence wired here
+└── Persistence layer     — conversations-history.json read/write, Markdown export
+    ├── load_conversations()
+    ├── save_conversations()
+    ├── generate_topic_summary()
+    ├── generate_resume_summary()
+    ├── export_to_markdown()          — writes a .md file to disk (used by the CLI)
+    └── render_conversation_markdown()— returns .md content as a string (used by the web UI)
+
+arxiv-agent.py             — CLI interface only; imports core.py
+└── main(), _show_startup_menu()
+
+app_streamlit.py           — Streamlit web UI; imports core.py
 ```
 
-This separation makes it easy to swap the CLI (`main()`) for a web UI without touching the agent or persistence logic.
+Both interfaces share `conversations-history.json` — a conversation started in the
+CLI can be resumed in the web UI, and vice versa.
 
 ## Requirements
 
@@ -74,7 +82,7 @@ This separation makes it easy to swap the CLI (`main()`) for a web UI without to
 ## Installation
 
 ```bash
-pip install anthropic arxiv python-dotenv
+pip install -r requirements.txt
 ```
 
 ## Configuration
@@ -89,9 +97,22 @@ ANTHROPIC_API_KEY=your_api_key_here
 
 > **Note:** Make sure the virtual environment is activated first (`venv\Scripts\activate` on Windows), otherwise Python won't find the installed packages.
 
+### CLI
+
 ```bash
 python arxiv-agent.py
 ```
+
+### Web UI
+
+```bash
+streamlit run app_streamlit.py
+```
+
+Opens in your browser (default `http://localhost:8501`). Features mirror the CLI:
+language selection, chat with SEARCH/FOLLOWUP/UNCLEAR routing, fetched papers shown
+as expandable cards, a sidebar to resume/delete/export saved conversations, and a
+button to export the current session to Markdown.
 
 ### Example session
 
