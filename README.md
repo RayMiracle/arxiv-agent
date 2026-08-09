@@ -38,6 +38,29 @@ In short: the difference between *"ask the model what it remembers"* and *"ask t
 model what actually exists on ArXiv right now, with evidence"* — for research work,
 that difference is what makes an answer trustworthy.
 
+## Scope & limitations
+
+**This agent works from paper abstracts only — it never reads full paper text.**
+`search_arxiv()` fetches only ArXiv's search-result metadata (title, authors,
+publication date, and abstract), and the abstract is further truncated to 400
+characters before being sent to Claude as context. It does not download or parse
+PDFs, and there is no full-text retrieval, chunking, or RAG over paper content.
+
+**What this means in practice:**
+
+- You can ask for an overview, the paper's stated contribution, or how it compares to
+  other found papers — all answerable from the abstract.
+- You **cannot** ask for specific examples, numeric results, method details, or
+  quotes from inside the paper — Claude does not have that text and will (correctly)
+  say so rather than guess.
+- If you need that level of detail, copy the relevant passage from the paper
+  yourself and paste it into the chat — Claude can then discuss that text directly.
+
+This is a deliberate scope choice for this version, not a bug: full-text retrieval
+would add real latency, cost (a full paper can be 10–50k+ tokens), and complexity
+that a lightweight abstract-search assistant doesn't need. See "Possible future
+extensions" below if this scope ever needs to grow.
+
 ## Features
 
 - Search ArXiv for papers on any topic
@@ -238,3 +261,27 @@ In Czech mode, accepted exit commands are: `exit`, `quit`, `konec`, `ukončit`.
 5. At most 12 conversations are kept; oldest are dropped when a 13th is saved.
 
 `conversations-history.json`, any `*export*` Markdown file, and `usage-log.jsonl` (LLM usage log — see Features above) are local, per-user data and are excluded from version control via `.gitignore`.
+
+## Possible future extensions
+
+Ideas for growing beyond the current abstract-only scope (see "Scope & limitations"
+above), roughly in order of how self-contained they are:
+
+- **Full-text reading of a single paper** — download the PDF from `paper["url"]`,
+  extract text (e.g. `pypdf` or `pdfplumber`), and send the full text (or the
+  relevant section) as context instead of just the 400-character abstract snippet.
+  Straightforward as a first step for one paper at a time; the main cost is token
+  usage on longer papers.
+- **RAG over full paper text** — for longer papers or multi-paper questions, chunk
+  the extracted text, embed it, and retrieve only the passages relevant to the
+  question instead of sending the whole document. Needed once full-text sending
+  becomes too expensive or the paper is too long to fit in context.
+- **Citing specific sections/pages** — once full text is available, have Claude cite
+  the section or page a claim comes from, not just the paper title.
+- **Multi-paper comparison at full-text depth** — read several full papers in
+  parallel and compare specific findings, not just abstracts.
+- **Structured extraction** — pull out things like datasets used, reported metrics,
+  or code/data availability into a structured table across multiple papers.
+
+None of this is implemented — this list exists to record the scope trade-off made in
+this version and give a starting point if the project is picked up again.
