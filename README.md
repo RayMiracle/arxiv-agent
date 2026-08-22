@@ -3,6 +3,13 @@
 An interactive tool that uses Claude to help you explore academic papers from ArXiv,
 available as both a CLI and a Streamlit web UI.
 
+## License
+
+This project's code is MIT licensed (see `LICENSE`) -- read, reuse, or adapt
+it freely. ArXiv itself is open-access (no subscription required, see "What
+You Can Search For" below); this project only reads paper metadata/abstracts
+via ArXiv's public search, it doesn't redistribute any paper content.
+
 ## Why this instead of plain ChatGPT/Claude chat?
 
 A general chat model without search answers **from its training data** — it has no
